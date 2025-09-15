@@ -23,8 +23,17 @@ let ticketData = {};
 const activeApplications = new Map();
 const applicationTimeouts = new Map();
 
+// OG Role Configuration
+const OG_ROLE_ID = '1417236375941550100';
+const MAX_OG_CLAIMS = 100;
+
 if (fs.existsSync(ticketDataFile)) {
     ticketData = JSON.parse(fs.readFileSync(ticketDataFile, 'utf-8'));
+    // Initialize ogClaims if not present
+    if (!ticketData.ogClaims) {
+        ticketData.ogClaims = [];
+        saveTicketData();
+    }
 } else {
     ticketData = {
         counters: {
@@ -33,7 +42,8 @@ if (fs.existsSync(ticketDataFile)) {
             'player-report': 0,
             'server-help': 0
         },
-        activeTickets: {}
+        activeTickets: {},
+        ogClaims: []
     };
     saveTicketData();
 }
@@ -97,6 +107,11 @@ const commands = [
     {
         name: 'application-setup',
         description: 'Setup the application panel in this channel',
+        default_member_permissions: PermissionFlagsBits.Administrator.toString()
+    },
+    {
+        name: 'og-role-setup',
+        description: 'Setup the OG role claim panel in this channel',
         default_member_permissions: PermissionFlagsBits.Administrator.toString()
     }
 ];
@@ -311,6 +326,49 @@ client.on('interactionCreate', async interaction => {
 
             await interaction.channel.send({ embeds: [imageEmbed, embed], components: [row] });
             await interaction.reply({ content: 'Application panel has been set up successfully.', ephemeral: true });
+        }
+
+        if (commandName === 'og-role-setup') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                return interaction.reply({ content: '❌ You need Administrator permissions to use this command.', ephemeral: true });
+            }
+
+            const remainingClaims = MAX_OG_CLAIMS - ticketData.ogClaims.length;
+
+            const imageEmbed = new EmbedBuilder()
+                .setImage('https://i.imgur.com/JhgVwpV.png')
+                .setColor(THEME_COLOR);
+
+            const embed = new EmbedBuilder()
+                .setTitle('OG ROLE')
+                .setDescription(`For supporting the early development of our server, we want to thank you by giving you a custom <@&${OG_ROLE_ID}> rank in our discord!`)
+                .addFields({
+                    name: 'Information:',
+                    value: '`-` To claim your rank, press the button below (only 100 ranks can be claimed).'
+                })
+                .setColor(THEME_COLOR)
+                .setFooter({
+                    text: 'Mineset  •  Rank Claim',
+                    iconURL: 'https://i.imgur.com/K0Lw3oU.png'
+                });
+
+            const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('claim-og-role')
+                        .setLabel(`Claim Rank (${remainingClaims})`)
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(remainingClaims <= 0)
+                );
+
+            const message = await interaction.channel.send({ embeds: [imageEmbed, embed], components: [row] });
+
+            // Store the message ID for future updates
+            ticketData.ogRoleMessageId = message.id;
+            ticketData.ogRoleChannelId = interaction.channel.id;
+            saveTicketData();
+
+            await interaction.reply({ content: 'OG role panel has been set up successfully.', ephemeral: true });
         }
     }
 
@@ -786,6 +844,83 @@ client.on('interactionCreate', async interaction => {
                 }
 
                 activeApplications.delete(interaction.user.id);
+            }
+        }
+
+        if (interaction.customId === 'claim-og-role') {
+            // Check if user has already claimed the role
+            if (ticketData.ogClaims.includes(interaction.user.id)) {
+                return interaction.reply({
+                    content: '❌ You have already claimed your OG role!',
+                    ephemeral: true
+                });
+            }
+
+            // Check if user already has the role
+            if (interaction.member.roles.cache.has(OG_ROLE_ID)) {
+                return interaction.reply({
+                    content: '❌ You already have the OG role!',
+                    ephemeral: true
+                });
+            }
+
+            // Check if claims limit has been reached
+            if (ticketData.ogClaims.length >= MAX_OG_CLAIMS) {
+                return interaction.reply({
+                    content: '❌ Sorry, all OG roles have been claimed!',
+                    ephemeral: true
+                });
+            }
+
+            try {
+                // Add the role to the user
+                await interaction.member.roles.add(OG_ROLE_ID);
+
+                // Track the claim
+                ticketData.ogClaims.push(interaction.user.id);
+                saveTicketData();
+
+                // Update the button with new count
+                const remainingClaims = MAX_OG_CLAIMS - ticketData.ogClaims.length;
+
+                const row = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('claim-og-role')
+                            .setLabel(`Claim Rank (${remainingClaims})`)
+                            .setStyle(ButtonStyle.Secondary)
+                            .setDisabled(remainingClaims <= 0)
+                    );
+
+                await interaction.message.edit({ components: [row] });
+
+                // Send success message
+                const successEmbed = new EmbedBuilder()
+                    .setTitle('✅ OG Role Claimed!')
+                    .setDescription(`Congratulations ${interaction.user}! You have successfully claimed your **OG** role.\n\nThank you for supporting the early development of Mineset!`)
+                    .setColor(0x00ff00)
+                    .setFooter({
+                        text: `Claim #${ticketData.ogClaims.length} of ${MAX_OG_CLAIMS}`,
+                        iconURL: 'https://i.imgur.com/K0Lw3oU.png'
+                    })
+                    .setTimestamp();
+
+                await interaction.reply({ embeds: [successEmbed], ephemeral: true });
+
+            } catch (error) {
+                console.error('Error assigning OG role:', error);
+
+                // If role assignment failed, remove the claim
+                const index = ticketData.ogClaims.indexOf(interaction.user.id);
+                if (index > -1) {
+                    ticketData.ogClaims.splice(index, 1);
+                    saveTicketData();
+                }
+
+                await interaction.reply({
+                    content: '❌ Failed to assign the OG role. Please contact an administrator.',
+                    ephemeral: true
+                });
             }
         }
 
